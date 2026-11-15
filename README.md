@@ -1,15 +1,38 @@
 # pi-pocket-stable-fast-3d
 
-A Pi Pocket drop-in that converts one uploaded image into a textured 3D GLB
+A Pi Pocket drop-in that converts one conversation-scoped image into a textured 3D GLB
 through a self-hosted [Stable Fast 3D](https://github.com/nikau-herewini/stable-fast-3d)
 API. It mirrors the `pi-pocket-stable-diffusion` extension pattern.
 
 ## Tools
 
-- `sf3d_generate`: converts one current-conversation upload (PNG/JPEG, at most
-  10 MB and 16 million pixels) into a GLB saved under the extension's outputs
-  directory. One call runs at a time across conversations. Unknown submissions
-  are never retried automatically.
+- `sf3d_generate`: converts one PNG/JPEG (at most 10,000,000 bytes and
+  16,000,000 pixels) into a GLB saved under the extension's outputs directory.
+  One call runs at a time across conversations. Unknown submissions are never
+  retried automatically.
+
+### Image sources
+
+Supply an absolute local path to one of:
+
+- An upload in the current conversation.
+- An unchanged `sd_generate` output recorded in this conversation while both
+  extensions are enabled. A hook records the output path and SHA256 from the
+  successful tool result, including nested calls from codemode. Merely sharing
+  Stable Diffusion's output directory does not grant access.
+- A program-generated, resized, or compressed image under
+  `<workspace>/.sf3d-inputs/<conversationId>/`. The `sf3d_inputs` prompt section
+  gives Pi the exact folder. Programs must create it before saving files there.
+  This folder requires a local workspace and must not be a symlink.
+
+Older SD outputs have no recorded ownership. Copy them into the processed-image
+folder to use them. Save edited SD outputs there too, rather than overwriting
+recorded originals. Do not commit these working images to source control.
+
+All sources have the same byte, pixel, and PNG/JPEG header checks. These checks
+are not full image decoding; the backend can still reject corrupt images.
+Validation errors identify the failed check and suggest a correction. No model
+request is made when local validation fails.
 
 ## Owner settings
 

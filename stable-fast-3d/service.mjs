@@ -2,7 +2,7 @@ import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { hash } from './config.mjs';
-import { readImage } from './input.mjs';
+import { InputValidationError, readImage } from './input.mjs';
 
 const PREFIX = 'x.stable-fast-3d.';
 export const MEMO = Object.freeze({ started: PREFIX + 'started', outcome: PREFIX + 'outcome' });
@@ -36,7 +36,8 @@ async function bounded(response, limit) {
 export function createService(directory, Lock, getConfig, options = {}) {
   const http = options.fetch ?? fetch;
   const dataDir = options.dataDir;
-  const readImageFile = options.readImage ?? ((path, conversationId, signal) => readImage(dataDir, path, conversationId, signal));
+  const readImageFile = options.readImage ?? (async (path, conversationId, signal, api, context) =>
+    readImage(dataDir, path, conversationId, signal, await options.sources?.(api, context)));
   const readyMs = options.readyMs ?? LIMITS.readyMs;
 
   async function ready(config, signal) {
@@ -119,7 +120,7 @@ export function createService(directory, Lock, getConfig, options = {}) {
         if (active.deadline <= Date.now()) fail('Generation deadline expired.');
         if (resuming) fail('This call was submitted or stopped; its outcome is unknown. Owner recovery is required. Do not retry.');
         const signal = AbortSignal.any([...(context.abortSignal ? [context.abortSignal] : []), AbortSignal.timeout(Math.max(1, active.deadline - Date.now()))]);
-        const image = await readImageFile(args.image, api.conversationId, signal);
+        const image = await readImageFile(args.image, api.conversationId, signal, api, context);
         await ready(config, signal);
         startedWritten = true;
         await api.memo(MEMO.started, true, context);
@@ -156,6 +157,7 @@ export function createService(directory, Lock, getConfig, options = {}) {
         if (active && !startedWritten) {
           try { await clear(api, context, key); } catch { /* Preserve a lock if the call ended. */ }
         }
+        if (error instanceof InputValidationError) fail(error.message);
         if (error instanceof Error && error.message.startsWith('SF3D:')) throw error;
         fail('Generation stopped or failed. Use /sf3d-status if its lock remains.');
       } finally { running.delete(key); }
