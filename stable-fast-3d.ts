@@ -1,21 +1,27 @@
 /**
- * Convert one uploaded image into a textured 3D GLB through an owner-configured
- * self-hosted Stable Fast 3D service. Reads only current-conversation uploads.
+ * Convert one conversation-scoped image into a textured 3D GLB through an owner-configured
+ * self-hosted Stable Fast 3D service. Accepts uploads, recorded SD outputs, and processed inputs.
  * Writes GLB outputs below the data folder and durable receipts in Pi Pocket.
  * Adds an owner-only browser settings sheet; no public routes or telemetry.
  *
  * @title Stable Fast 3D
  */
 import { join } from 'node:path';
-import { defineDoc, defineExtension, defineTool } from '@earendil-works/pi-durable';
+import { defineDoc, defineExtension, defineTool, hook, section, ToolTask } from '@earendil-works/pi-durable';
 import { obj, str } from '@earendil-works/pi-schema';
 import { configuration } from './stable-fast-3d/config.mjs';
 import { createService } from './stable-fast-3d/service.mjs';
+import { processedDirectory, recordGeneratedImage } from './stable-fast-3d/sources.mjs';
 
 export const pocketApi = 2;
 export const ModelLock = defineDoc({
   kind: 'x.stable-fast-3d.lock', version: 1, scope: 'session',
   initial: () => ({}), checkpointWhen: () => true,
+});
+
+export const ImageSources = defineDoc({
+  kind: 'x.stable-fast-3d.sources', version: 1, scope: 'conversation',
+  initial: () => ({ images: {} }), checkpointWhen: () => true,
 });
 
 export default function stableFast3d(host, web) {
@@ -29,12 +35,19 @@ export default function stableFast3d(host, web) {
   web.client('stable-fast-3d-browser', { access: 'owner' });
   const config = () => configuration({ endpoint: web.setting('endpoint'), timeoutMinutes: web.setting('timeoutMinutes') });
   const directory = join(host.dataDir, 'extensions', 'stable-fast-3d', 'outputs');
-  const service = createService(directory, ModelLock, config, { dataDir: host.dataDir });
+  const processedDir = id => processedDirectory(host.cwdOf(id), id);
+  const service = createService(directory, ModelLock, config, {
+    dataDir: host.dataDir,
+    sources: async (api, context) => ({
+      processedDir: processedDir(api.conversationId),
+      generatedImages: (await api.snapshot(ImageSources, api.conversationId, context))?.images ?? {},
+    }),
+  });
   const generate = defineTool({
     name: 'sf3d_generate',
-    description: 'Convert 1 uploaded image into a textured 3D GLB using the local Stable Fast 3D backend. The image must be an absolute path to a current-conversation upload (PNG or JPEG, at most 10 MB and 16 million pixels). Returns the saved GLB path and metadata; render the GLB with the artifact tool. One call at a time across conversations. Unknown submissions are never retried automatically.',
+    description: 'Convert 1 PNG or JPEG into a textured 3D GLB using the local Stable Fast 3D backend. Use an absolute path to this conversation’s upload, recorded sd_generate output, or processed-image folder (see sf3d_inputs). At most 10 MB and 16 million pixels. Returns the saved GLB path and metadata; render the GLB with the artifact tool. One call at a time across conversations. Unknown submissions are never retried automatically.',
     parameters: obj({
-      image: str({ minLength: 1, maxLength: 4096, description: 'Absolute path to a current-conversation upload.' }),
+      image: str({ minLength: 1, maxLength: 4096, description: 'Absolute path to an allowed image from this conversation.' }),
     }),
     replay: 'safe', execute: (args, api, context) => service.generate(args, api, context),
   });
@@ -61,5 +74,15 @@ export default function stableFast3d(host, web) {
       return { type: 'toast', level: 'info', message: 'Lock released. The previous submission will not be repeated.' };
     },
   });
-  return defineExtension({ name: 'stable-fast-3d', tools: [generate] });
+  return defineExtension({
+    name: 'stable-fast-3d', tools: [generate],
+    hooks: [hook(ToolTask, {
+      afterTool: (call, result, api, context) => recordGeneratedImage(call, result, api, context, ImageSources),
+    })],
+    sections: [section('sf3d_inputs', input => {
+      const folder = processedDir(input.conversationId);
+      return 'Stable Fast 3D accepts this conversation’s uploads and sd_generate outputs recorded while this extension is enabled.'
+        + (folder ? ` For programmatically resized/compressed images, create ${folder} and save the PNG/JPEG there. Older SD outputs can also be copied there. Do not modify the originals.` : ' Processed-image inputs require a local workspace.');
+    })],
+  });
 }
