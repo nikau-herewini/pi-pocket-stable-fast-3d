@@ -1,6 +1,7 @@
 import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { Agent } from 'undici';
 import { hash } from './config.mjs';
 import { InputValidationError, readImage } from './input.mjs';
 
@@ -9,6 +10,15 @@ export const MEMO = Object.freeze({ started: PREFIX + 'started', outcome: PREFIX
 export const LIMITS = Object.freeze({ glb: 64_000_000, json: 8192, readyMs: 15_000 });
 const running = new Set();
 const fail = message => { throw new Error(`SF3D: ${message}`); };
+
+// Node's global fetch (undici) waits at most 300 seconds for response headers.
+// CPU generation can take longer than the configured deadline allows, so give
+// the request a dispatcher whose header wait covers the configured timeout.
+export function longFetch(fetchImpl, timeoutMs, agentFactory = options => new Agent(options)) {
+  const headerWait = Math.max(300_000, timeoutMs + 60_000);
+  const agent = agentFactory({ connect: { timeout: 15_000 }, headersTimeout: headerWait, bodyTimeout: headerWait });
+  return (url, init = {}) => fetchImpl(url, { ...init, dispatcher: agent });
+}
 
 export function validateGLB(bytes) {
   if (bytes.length < 20 || bytes.length > LIMITS.glb) fail('Backend returned an invalid or oversized GLB.');
@@ -34,13 +44,13 @@ async function bounded(response, limit) {
 }
 
 export function createService(directory, Lock, getConfig, options = {}) {
-  const http = options.fetch ?? fetch;
+  const base = options.fetch ?? fetch;
   const dataDir = options.dataDir;
   const readImageFile = options.readImage ?? (async (path, conversationId, signal, api, context) =>
     readImage(dataDir, path, conversationId, signal, await options.sources?.(api, context)));
   const readyMs = options.readyMs ?? LIMITS.readyMs;
 
-  async function ready(config, signal) {
+  async function ready(http, config, signal) {
     const boundedSignal = AbortSignal.any([signal, AbortSignal.timeout(readyMs)]);
     let response;
     try {
@@ -100,6 +110,7 @@ export function createService(directory, Lock, getConfig, options = {}) {
       const saved = await api.memo(MEMO.outcome, context);
       if (saved) { await clear(api, context, key); return result(saved); }
       const config = getConfig();
+      const http = longFetch(base, config.timeoutMs);
       const started = await api.memo(MEMO.started, context);
       if (running.has(key)) fail('This request is already running.');
       running.add(key);
@@ -121,7 +132,7 @@ export function createService(directory, Lock, getConfig, options = {}) {
         if (resuming) fail('This call was submitted or stopped; its outcome is unknown. Owner recovery is required. Do not retry.');
         const signal = AbortSignal.any([...(context.abortSignal ? [context.abortSignal] : []), AbortSignal.timeout(Math.max(1, active.deadline - Date.now()))]);
         const image = await readImageFile(args.image, api.conversationId, signal, api, context);
-        await ready(config, signal);
+        await ready(http, config, signal);
         startedWritten = true;
         await api.memo(MEMO.started, true, context);
         const form = new FormData();
