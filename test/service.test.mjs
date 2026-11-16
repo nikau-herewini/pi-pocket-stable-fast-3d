@@ -3,10 +3,36 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { configuration } from '../stable-fast-3d/config.mjs';
-import { createService, MEMO } from '../stable-fast-3d/service.mjs';
+import { createService, longFetch, MEMO } from '../stable-fast-3d/service.mjs';
 import { fixture, journal, Lock, readyResponse, glbResponse, glb } from './support.mjs';
 
 const args = { image: '/tmp/placeholder' };
+
+test('longFetch waits past the default 5-minute response-header timeout', async () => {
+  const captured = {};
+  const agent = Symbol('agent');
+  const wrapped = longFetch(
+    (url, init) => { captured.url = url; captured.init = init; return Promise.resolve(new Response('ok')); },
+    60 * 60 * 1000,
+    options => { captured.options = options; return agent; },
+  );
+  const response = await wrapped('http://example.invalid/readyz', { method: 'GET', signal: AbortSignal.timeout(1000) });
+  assert.equal(captured.url, 'http://example.invalid/readyz');
+  assert.equal(captured.init.dispatcher, agent);
+  assert.equal(captured.init.method, 'GET');
+  assert.ok(captured.init.signal instanceof AbortSignal);
+  assert.equal(captured.options.connect.timeout, 15_000);
+  assert.ok(captured.options.headersTimeout >= 60 * 60 * 1000 + 60_000);
+  assert.equal(captured.options.headersTimeout, captured.options.bodyTimeout);
+  assert.equal(response.status, 200);
+});
+
+test('longFetch never lowers the header wait below undici\'s default', async () => {
+  let options;
+  const wrapped = longFetch((_url, _init) => Promise.resolve(new Response()), 60_000, captured => { options = captured; return {}; });
+  await wrapped('http://example.invalid/readyz');
+  assert.ok(options.headersTimeout >= 300_000);
+});
 
 test('generates one persisted GLB, then replays from disk without network calls', async t => {
   const f = await fixture(t);
