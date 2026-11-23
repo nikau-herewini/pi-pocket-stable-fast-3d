@@ -85,7 +85,7 @@ export function createService(directory, Lock, getConfig, options = {}) {
     return { path, sha256: hash(bytes), bytes: bytes.length };
   }
 
-  async function result(saved) {
+  async function result(saved, api) {
     if (saved.error) fail(saved.error);
     let bytes;
     try {
@@ -97,9 +97,13 @@ export function createService(directory, Lock, getConfig, options = {}) {
       validateGLB(bytes);
       if (hash(bytes) !== saved.sha256) throw new Error();
     } catch { fail('Saved GLB is missing or changed. It will not be generated again automatically.'); }
+    let modelPreview;
+    try { modelPreview = await options.publishPreview?.(api.conversationId, bytes); }
+    catch { /* A preview failure must not lose the original or repeat generation. */ }
+    const preview = modelPreview ? 'Use View in 3D on this tool result.' : 'Render it with the artifact tool.';
     return {
-      output: [{ type: 'text', text: `Generated a ${saved.width}×${saved.height} ${saved.mimeType} into a GLB saved at ${saved.path}. Render it with the artifact tool.` }],
-      details: { path: saved.path, sha256: saved.sha256, bytes: saved.bytes, width: saved.width, height: saved.height, mimeType: saved.mimeType },
+      output: [{ type: 'text', text: `Generated a ${saved.width}×${saved.height} ${saved.mimeType} into a GLB saved at ${saved.path}. ${preview}` }],
+      details: { path: saved.path, sha256: saved.sha256, bytes: saved.bytes, width: saved.width, height: saved.height, mimeType: saved.mimeType, ...(modelPreview ? { modelPreview } : {}) },
     };
   }
 
@@ -108,7 +112,7 @@ export function createService(directory, Lock, getConfig, options = {}) {
     async generate(args, api, context) {
       const key = `${api.taskId}:${api.callId}`;
       const saved = await api.memo(MEMO.outcome, context);
-      if (saved) { await clear(api, context, key); return result(saved); }
+      if (saved) { await clear(api, context, key); return result(saved, api); }
       const config = getConfig();
       const http = longFetch(base, config.timeoutMs);
       const started = await api.memo(MEMO.started, context);
@@ -150,7 +154,7 @@ export function createService(directory, Lock, getConfig, options = {}) {
           const error = status === 503 ? 'Backend is busy. Try again later.' : `Backend rejected the request with HTTP ${status}.`;
           const receipt = await api.memo(MEMO.outcome, { error }, context);
           await clear(api, context, key);
-          return result(receipt);
+          return result(receipt, api);
         }
         let glb;
         try {
@@ -159,11 +163,11 @@ export function createService(directory, Lock, getConfig, options = {}) {
         } catch (error) {
           const receipt = await api.memo(MEMO.outcome, { error: 'Backend returned an invalid GLB.' }, context);
           await clear(api, context, key);
-          return result(receipt);
+          return result(receipt, api);
         }
         const receipt = await api.memo(MEMO.outcome, { ...await persist(key, glb), width: image.width, height: image.height, mimeType: image.mimeType }, context);
         await clear(api, context, key);
-        return result(receipt);
+        return result(receipt, api);
       } catch (error) {
         if (active && !startedWritten) {
           try { await clear(api, context, key); } catch { /* Preserve a lock if the call ended. */ }

@@ -11,6 +11,16 @@ API. It mirrors the `pi-pocket-stable-diffusion` extension pattern.
   One call runs at a time across conversations. Unknown submissions are never
   retried automatically.
 
+### 3D preview
+
+On Pi Pocket builds with model preview support, new successful results include
+**View in 3D**. It opens in the chat on desktop and fills the screen on phones.
+Rotate, zoom, pan, reset the camera, or download the original GLB. Anyone who
+can read the conversation can reopen its preview; there is no public link.
+
+Older builds and outputs saved before this feature still return the original
+GLB path for use with the artifact tool.
+
 ### Image sources
 
 Supply an absolute local path to one of:

@@ -46,6 +46,26 @@ test('generates one persisted GLB, then replays from disk without network calls'
   await writeFile(result.details.path, 'changed');
   await assert.rejects(service.generate({ image: f.inputPath }, reopened.api(), f.context), /missing or changed/);
 });
+test('publishes successful models for the current conversation and preserves the original if preview fails', async t => {
+  const token = 'a'.repeat(64), published = [];
+  const f = await fixture(t, { serviceOptions: { publishPreview: async (id, bytes) => {
+    published.push({ id, bytes });
+    return token;
+  } } });
+  const result = await f.service.generate({ image: f.inputPath }, f.api, f.context);
+  assert.equal(result.details.modelPreview, token);
+  assert.match(result.output[0].text, /View in 3D/);
+  assert.deepEqual(published, [{ id: f.api.conversationId, bytes: await readFile(result.details.path) }]);
+  assert.deepEqual(await f.service.generate({ image: f.inputPath }, f.api, f.context), result);
+  assert.equal(f.calls.filter(({ url }) => url.endsWith('/generate')).length, 1);
+
+  const unavailable = await fixture(t, { serviceOptions: { publishPreview: async () => { throw new Error('disk unavailable'); } } });
+  const fallback = await unavailable.service.generate({ image: unavailable.inputPath }, unavailable.api, unavailable.context);
+  assert.equal(fallback.details.modelPreview, undefined);
+  assert.match(fallback.output[0].text, /artifact tool/);
+  assert.deepEqual(await readFile(fallback.details.path), await readFile(result.details.path));
+});
+
 test('backend rejection and busy responses are saved as outcomes and clear the lock', async t => {
   for (const [status, message] of [[422, /rejected the request/], [503, /busy/]]) {
     const f = await fixture(t, { handler: url => url.endsWith('/readyz') ? readyResponse() : new Response('{}', { status, headers: { 'content-type': 'application/json' } }) });
