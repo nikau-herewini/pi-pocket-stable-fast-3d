@@ -38,6 +38,7 @@ export default function stableFast3d(host, web) {
   const processedDir = id => processedDirectory(host.cwdOf(id), id);
   const service = createService(directory, ModelLock, config, {
     dataDir: host.dataDir,
+    publishPreview: typeof host.publishModelPreview === 'function' ? (id, bytes) => host.publishModelPreview(id, bytes) : undefined,
     sources: async (api, context) => ({
       processedDir: processedDir(api.conversationId),
       generatedImages: (await api.snapshot(ImageSources, api.conversationId, context))?.images ?? {},
@@ -45,7 +46,7 @@ export default function stableFast3d(host, web) {
   });
   const generate = defineTool({
     name: 'sf3d_generate',
-    description: 'Convert 1 PNG or JPEG into a textured 3D GLB using the local Stable Fast 3D backend. Use an absolute path to this conversation’s upload, recorded sd_generate output, or processed-image folder (see sf3d_inputs). At most 10 MB and 16 million pixels. Returns the saved GLB path and metadata; render the GLB with the artifact tool. One call at a time across conversations. Unknown submissions are never retried automatically.',
+    description: 'Convert 1 PNG or JPEG into a textured 3D GLB using the local Stable Fast 3D backend. Use an absolute path to this conversation’s upload, recorded sd_generate output, or processed-image folder (see sf3d_inputs). At most 10 MB and 16 million pixels. Returns the saved GLB path and metadata. On supported Pi Pocket builds the successful result includes a View in 3D action; otherwise preview the GLB with the artifact tool. One call at a time across conversations. Unknown submissions are never retried automatically.',
     parameters: obj({
       image: str({ minLength: 1, maxLength: 4096, description: 'Absolute path to an allowed image from this conversation.' }),
     }),
